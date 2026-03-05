@@ -1,70 +1,44 @@
-"""
-Basic preprocessing pipeline for political texts
-- remove URLs, mentions, extra whitespace
-- language detection + translation to English
-- very simple tokenization / lemmatization
-"""
-
-import re
+import os
+import glob
+import json
 import pandas as pd
-from langdetect import detect, DetectorFactory
-from deep_translator import GoogleTranslator
-from nltk.tokenize import word_tokenize
-from nltk.stem import WordNetLemmatizer
-import nltk
+from preprocessing import preprocess_dataframe
 
-nltk.download('punkt', quiet=True)
-nltk.download('wordnet', quiet=True)
-
-DetectorFactory.seed = 42
-translator = GoogleTranslator(source='auto', target='en')
-lemmatizer = WordNetLemmatizer()
-
-
-def clean_text(text: str) -> str:
-    if not isinstance(text, str):
-        return ""
-    # Remove URLs, mentions, RT, extra spaces
-    text = re.sub(r'http\S+|www\S+|@\w+|RT|#[^\s]+', '', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
-
-
-def translate_if_non_english(text: str, max_len=4500) -> str:
-    if len(text) < 20:
-        return text
-    try:
-        lang = detect(text[:200])
-        if lang != 'en':
-            # truncate very long texts (API limit)
-            text_to_translate = text[:max_len]
-            translated = translator.translate(text_to_translate)
-            return translated
-        return text
-    except:
-        return text
-
-
-def lemmatize_text(text: str) -> str:
-    tokens = word_tokenize(text.lower())
-    lemmas = [lemmatizer.lemmatize(t) for t in tokens if t.isalpha()]
-    return " ".join(lemmas)
-
-
-def preprocess_dataframe(df: pd.DataFrame, text_col='text') -> pd.DataFrame:
-    print("Cleaning text ...")
-    df[text_col] = df[text_col].apply(clean_text)
-
-    print("Translating non-English texts ... (can be slow)")
-    df['translated'] = df[text_col].apply(translate_if_non_english)
-
-    print("Lemmatizing ...")
-    df['lemmatized'] = df['translated'].apply(lemmatize_text)
-
-    df = df[df['lemmatized'].str.strip() != ''].copy()
-    return df
-
+def main():
+    raw_dir = os.path.join("data", "raw", "miller_speeches", "speeches")
+    json_files = glob.glob(os.path.join(raw_dir, "*.json"))
+    
+    data = []
+    for f in json_files:
+        with open(f, 'r', encoding='utf-8') as file:
+            try:
+                content = json.load(file)
+                date_str = content.get("date", "")
+                year = date_str[:4] if date_str and len(date_str) >= 4 else "Unknown"
+                
+                data.append({
+                    "president": content.get("president", "Unknown"),
+                    "title": content.get("title", ""),
+                    "date": date_str,
+                    "year": year,
+                    "text": content.get("transcript", "")
+                })
+            except Exception as e:
+                print(f"Error reading {f}: {e}")
+                
+    df = pd.DataFrame(data)
+    print(f"Loaded {len(df)} speeches.")
+    
+    # We might want to sample if taking too long, but let's process all first
+    # Process dataframe
+    df_clean = preprocess_dataframe(df, text_col='text')
+    
+    # Save to CSV
+    out_dir = os.path.join("data", "cleaned")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, "cleaned_speeches.csv")
+    df_clean.to_csv(out_path, index=False)
+    print(f"Saved to {out_path}")
 
 if __name__ == "__main__":
-    # Example usage (you will usually call from notebook)
-    print("This is a library module. Run from notebook.")
+    main()
